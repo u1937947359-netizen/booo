@@ -257,6 +257,367 @@
                 if (r === 1) {
                     const corridor = document.createElement('div');
                     corridor.className = 'corridor';
+                    corridor.textContent = '';
+                    roomGrid.appendChild(corridor);
+                }
+                roomGrid.appendChild(createDeskElement(r, 'right'));
+            }
+            const manager = document.createElement('div');
+            manager.className = 'desk manager occupied';
+            manager.innerHTML = '<span class="operator-name">BACK OFFICE</span>';
+            roomGrid.appendChild(manager);
+        }
+
+        function createDeskElement(row, side) {
+            const desk = document.createElement('div');
+            const id = `${row}-${side}`;
+            desk.id = id;
+            desk.className = 'desk';
+            if (row === 6) desk.classList.add('highlight');
+            desk.draggable = true;
+            desk.addEventListener('dragstart', handleDragStart);
+            desk.addEventListener('dragover', handleDragOver);
+            desk.addEventListener('drop', handleDrop);
+            return desk;
+        }
+
+        window.saveToGoogleSheets = () => {
+            const callbackName = 'cb_' + Date.now();
+            const script = document.createElement('script');
+            window[callbackName] = (res) => {
+                delete window[callbackName];
+                script.remove();
+                showToast("Dati sincronizzati");
+            };
+            const dataStr = encodeURIComponent(JSON.stringify(mapData));
+            script.src = `${GAS_URL}?action=save&data=${dataStr}&callback=${callbackName}`;
+            document.body.appendChild(script);
+            showToast("Sincronizzazione Sheets...");
+        };
+
+        window.loadFromGoogleSheets = () => {
+            const callbackName = 'cb_load_' + Date.now();
+            const script = document.createElement('script');
+            const t = setTimeout(() => { hideLoader(); script.remove(); }, 5000);
+            window[callbackName] = (data) => {
+                clearTimeout(t);
+                delete window[callbackName];
+                script.remove();
+                if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+                    mapData = data;
+                    saveFirestoreState(); 
+                    renderMap();
+                }
+                hideLoader();
+            };
+            script.src = `${GAS_URL}?action=load&callback=${callbackName}`;
+            document.body.appendChild(script);
+        };
+
+        const initAuth = async () => {
+            if (!auth) {
+                // Se non c'è Firebase, carichiamo comunque da Sheets
+                loadFromGoogleSheets();
+                return;
+            }
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Auth error", err);
+                loadFromGoogleSheets(); // Fallback su Sheets se Firebase fallisce
+            }
+        };
+
+        if (auth) {
+            onAuthStateChanged(auth, (u) => {
+                user = u;
+                if (user) {
+                    startListening();
+                    loadFromGoogleSheets();
+                }
+            });
+        }
+
+        function startListening() {
+            if (!db) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'map', 'mapStateDoc');
+            onSnapshot(docRef, (snapshot) => {
+                if (snapshot.exists()) {
+                    mapData = snapshot.data();
+                    renderMap();
+                }
+                hideLoader();
+            }, (err) => {
+                console.error("Firestore error", err);
+                hideLoader();
+            });
+        }
+
+        function renderMap() {
+            const desks = document.querySelectorAll('.desk:not(.manager)');
+            desks.forEach(desk => {
+                const id = desk.id;
+                const name = mapData[id];
+                if (name) {
+                    desk.classList.add('occupied');
+                    desk.innerHTML = `
+                        <span class="headset-icon">🎧</span>
+                        <span class="operator-name">${name}</span>
+                        <div class="delete-btn" onclick="window.removeOp('${id}')">×</div>
+                    `;
+                } else {
+                    desk.classList.remove('occupied');
+                    desk.innerHTML = '';
+                }
+            });
+        }
+
+        async function saveFirestoreState() {
+            if (!user || !db) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'map', 'mapStateDoc');
+            try { await setDoc(docRef, mapData); } catch (e) { console.error("Firestore Set Error", e); }
+        }
+
+        window.addOperator = () => {
+            const input = document.getElementById('newName');
+            if (!input) return;
+            const name = input.value.trim().toUpperCase();
+            if (!name) return;
+            const emptyId = Array.from(document.querySelectorAll('.desk:not(.occupied):not(.manager)')).map(d => d.id)[0];
+            if (!emptyId) { showToast("Pieno!"); return; }
+            mapData[emptyId] = name;
+            saveFirestoreState();
+            renderMap(); // Render immediato per UI fluida
+            input.value = '';
+        };
+
+        window.removeOp = (id) => {
+            delete mapData[id];
+            saveFirestoreState();
+            renderMap();
+        };
+
+        let draggedId = null;
+        function handleDragStart(e) { if (!this.classList.contains('occupied')) return e.preventDefault(); draggedId = this.id; }
+        function handleDragOver(e) { e.preventDefault(); }
+        function handleDrop(e) {
+            e.preventDefault();
+            const targetId = this.id;
+            if (draggedId && targetId && draggedId !== targetId) {
+                const temp = mapData[targetId];
+                mapData[targetId] = mapData[draggedId];
+                if (temp) mapData[draggedId] = temp; else delete mapData[draggedId];
+                saveFirestoreState();
+                renderMap();
+            }
+        }
+
+        setupGrid();
+        initAuth();
+    </script>
+</body>
+</html>            transform: translateY(-2px);
+            border-color: #3b82f6;
+        }
+
+        .corridor {
+            grid-column: 2;
+            grid-row: 1 / span 6;
+            background: #1e1b4b;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            writing-mode: vertical-rl;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            color: #e2e8f0;
+            border: 1px solid #312e81;
+        }
+
+        .operator-name {
+            font-weight: 700;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            margin-top: 8px;
+            pointer-events: none;
+            text-align: center;
+            padding: 0 5px;
+            word-break: break-word;
+        }
+
+        .headset-icon {
+            font-size: 1.5rem;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+            pointer-events: none;
+        }
+
+        .delete-btn {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 22px;
+            height: 22px;
+            background: #ef4444;
+            color: white;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            cursor: pointer;
+            z-index: 10;
+            border: 2px solid white;
+        }
+
+        .desk.occupied:hover .delete-btn {
+            display: flex;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 0.5s ease;
+        }
+
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 99px;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2);
+            display: none;
+            z-index: 200;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 flex flex-col items-center min-h-screen">
+
+    <div id="loading" class="loading-overlay">
+        <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p class="text-lg font-bold text-slate-700">Sincronizzazione in corso...</p>
+        <p class="text-sm text-slate-400 mt-2">Recupero dati in corso</p>
+        <button onclick="hideLoader()" class="mt-6 text-blue-600 font-semibold underline">Entra nel sistema</button>
+    </div>
+
+    <div id="toast">Operazione completata</div>
+
+    <div class="max-w-4xl w-full flex flex-col items-center">
+        <header class="text-center mb-10">
+            <h1 class="text-3xl font-extrabold text-slate-800 tracking-tight mb-2 uppercase">
+                Mappa Back Office
+            </h1>
+            <p class="text-slate-500 font-medium">Gestione Postazioni Operative</p>
+        </header>
+
+        <div class="mb-8 w-full flex flex-col sm:flex-row gap-3 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <input type="text" id="newName" placeholder="NOME OPERATORE..." 
+                   class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase text-sm font-semibold">
+            
+            <div class="flex gap-2">
+                <button id="addBtn" onclick="addOperator()" 
+                        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold transition-colors text-sm shadow-md whitespace-nowrap">
+                    AGGIUNGI
+                </button>
+                <button onclick="saveToGoogleSheets()" 
+                        class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-bold transition-colors text-sm shadow-md flex items-center gap-2 whitespace-nowrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                    </svg>
+                    SALVA
+                </button>
+            </div>
+        </div>
+
+        <div class="room-grid" id="roomGrid">
+            <!-- Griglia generata via JS -->
+        </div>
+
+        <div class="mt-10 flex flex-wrap justify-center gap-6 text-sm text-slate-500 bg-white/50 p-4 rounded-xl">
+            <div class="flex items-center gap-2">
+                <div class="w-4 h-4 bg-blue-100 border border-blue-500 rounded"></div>
+                <span>Occupato</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-4 h-4 bg-yellow-100 border border-yellow-500 rounded"></div>
+                <span>Prima Postazione</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-4 h-4 bg-slate-800 border border-slate-900 rounded"></div>
+                <span>Responsabile</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-4 h-4 bg-white border border-dashed border-slate-400 rounded"></div>
+                <span>Libero</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbwk_i7amwT2Dreux4JV82WF7RAxbboaDQLZl2J6XFumDdoQsMF_fQ8bHLX3DPXN8b1qhg/exec";
+        
+        // GESTIONE CONFIGURAZIONE FIREBASE (FALLBACK PER BROWSER ESTERNO)
+        let firebaseConfig;
+        try {
+            firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        } catch (e) {
+            firebaseConfig = {};
+        }
+
+        // Se siamo fuori da Gemini, usiamo una config vuota o placeholder (Nota: per funzionare fuori, dovresti inserire qui i tuoi dati reali)
+        if (!firebaseConfig.apiKey) {
+            console.warn("Configurazione Firebase non trovata. L'app funzionerà solo in modalità locale/Sheets.");
+        }
+
+        const app = (firebaseConfig.apiKey) ? initializeApp(firebaseConfig) : null;
+        const db = app ? getFirestore(app) : null;
+        const auth = app ? getAuth(app) : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'back-office-map-v1';
+
+        let user = null;
+        let mapData = {};
+
+        window.hideLoader = () => {
+            const loader = document.getElementById('loading');
+            if (loader) loader.style.display = 'none';
+        };
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.textContent = message;
+            toast.style.display = 'block';
+            setTimeout(() => { if(toast) toast.style.display = 'none'; }, 3000);
+        }
+
+        const roomGrid = document.getElementById('roomGrid');
+        function setupGrid() {
+            roomGrid.innerHTML = '';
+            for (let r = 1; r <= 6; r++) {
+                roomGrid.appendChild(createDeskElement(r, 'left'));
+                if (r === 1) {
+                    const corridor = document.createElement('div');
+                    corridor.className = 'corridor';
                     corridor.textContent = 'CORRIDOIO';
                     roomGrid.appendChild(corridor);
                 }
@@ -420,4 +781,5 @@
         initAuth();
     </script>
 </body>
+
 </html>
